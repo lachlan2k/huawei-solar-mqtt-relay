@@ -1,0 +1,21 @@
+modbus:
+  ip: 192.168.8.1
+  port: 6607
+  slave_id: 1
+  username: user
+  password: z
+
+broadcast:
+  destination_ip: 192.168.8.255
+  self_ip: 192.168.8.2
+
+mqtt:
+  broker: tcp://localhost:1883
+  topic: solar/inverter
+  username: ""
+  password: ""
+  qos: 0
+  retain: false
+
+interval: 5s
+log_query: true

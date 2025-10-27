@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"log"
+	"log/slog"
 	"net"
 	"os"
 	"os/signal"
@@ -15,6 +15,7 @@ import (
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"gopkg.in/yaml.v3"
 
+	"github.com/lachlan2k/huawei-solar-mqtt-relay/internal/modbus"
 	"github.com/lachlan2k/huawei-solar-mqtt-relay/internal/solar"
 )
 
@@ -59,6 +60,8 @@ func loadConfig(path string) (*Config, error) {
 }
 
 func main() {
+	slog.SetLogLoggerLevel(slog.LevelDebug)
+
 	if len(os.Args) < 2 {
 		printUsage()
 		os.Exit(2)
@@ -88,7 +91,8 @@ func runAgent(args []string) {
 
 	cfg, err := loadConfig(*cfgPath)
 	if err != nil {
-		log.Fatalf("load config: %v", err)
+		slog.Error("load config", "err", err)
+		os.Exit(1)
 	}
 
 	interval := 30 * time.Second
@@ -96,7 +100,7 @@ func runAgent(args []string) {
 		if d, err := time.ParseDuration(cfg.Interval); err == nil {
 			interval = d
 		} else {
-			log.Printf("invalid interval %q, using default 30s: %v", cfg.Interval, err)
+			slog.Warn("invalid interval", "interval", cfg.Interval, "err", err)
 		}
 	}
 
@@ -104,21 +108,28 @@ func runAgent(args []string) {
 	broadcastDstIP := net.ParseIP(cfg.Broadcast.DestinationIP)
 	if broadcastDstIP == nil {
 		broadcastDstIP = net.IPv4(255, 255, 255, 255)
+		slog.Info("defaulting broadcast destination IP", "ip", broadcastDstIP)
 	}
 
 	broadcastSelfIP := net.ParseIP(cfg.Broadcast.SelfIP)
 	if broadcastSelfIP == nil {
-		log.Fatalf("invalid broadcast self IP %q", cfg.Broadcast.SelfIP)
+		slog.Error("invalid broadcast self IP", "self_ip", cfg.Broadcast.SelfIP)
+		os.Exit(1)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	q, err := solar.NewClient(cfg.Modbus.IP, cfg.Modbus.Port, byte(cfg.Modbus.SlaveID))
+	// dial modbus tcp
+	conn, err := net.Dial("tcp", fmt.Sprintf("%s:%d", cfg.Modbus.IP, cfg.Modbus.Port))
 	if err != nil {
-		log.Fatalf("modbus client: %v", err)
+		slog.Error("failed to dial modbus tcp", "err", err)
+		os.Exit(1)
 	}
-	defer q.Close()
+	defer conn.Close()
+
+	q := solar.NewClient(modbus.NewModbusConn(conn, cfg.Modbus.SlaveID))
+	go q.Run(ctx)
 
 	// MQTT config etc
 	if cfg.MQTT.ClientID == "" {
@@ -134,7 +145,8 @@ func runAgent(args []string) {
 
 	mc := mqtt.NewClient(mopts)
 	if token := mc.Connect(); !token.WaitTimeout(10*time.Second) || token.Error() != nil {
-		log.Fatalf("mqtt connect: %v", token.Error())
+		slog.Error("mqtt connect", "err", token.Error())
+		os.Exit(1)
 	}
 	defer mc.Disconnect(2000)
 
@@ -144,14 +156,14 @@ func runAgent(args []string) {
 	// Initial broadcast to let the inverter know we're here
 	err = q.BroadcastHello(broadcastDstIP, broadcastSelfIP)
 	if err != nil {
-		log.Printf("Problem when trying to broadcast hello message, proceeding anyway (normal when across VLANs/subnets) %v\n", err)
+		slog.Warn("problem when trying to broadcast hello message, proceeding anyway (normal when across VLANs/subnets)", "err", err)
 	}
 
-	err = q.Login(cfg.Modbus.Username, cfg.Modbus.Password)
+	err = q.Login(ctx, cfg.Modbus.Username, cfg.Modbus.Password)
 	if err != nil {
-		log.Printf("Problem when trying to log in to inverter, proceeding anyway... %v\n", err)
+		slog.Warn("problem when trying to log in to inverter, proceeding anyway", "err", err)
 	} else {
-		log.Println("Logged in")
+		slog.Info("logged in")
 	}
 
 	// Query goroutine
@@ -163,36 +175,47 @@ func runAgent(args []string) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				log.Println("querying...")
+				if cfg.LogQuery {
+					slog.Info("querying...")
+				}
 				d, err := q.Query(ctx)
 
 				if err != nil {
-					log.Printf("query error: %v", err)
-					log.Println("attempting login again (probably timed out)")
+					slog.Warn("query error", "err", err)
+					slog.Info("attempting login again (likely timed out)")
 
-					err = q.Login(cfg.Modbus.Username, cfg.Modbus.Password)
+					err = q.Login(ctx, cfg.Modbus.Username, cfg.Modbus.Password)
 					if err != nil {
-						log.Printf("failed to complete login again: %v\n", err)
-						log.Println("sending broadcast then trying login again")
+						slog.Warn("failed to complete login again", "err", err)
+						slog.Info("sending broadcast then trying login again")
 
 						err = q.BroadcastHello(broadcastDstIP, broadcastSelfIP)
-						log.Printf("error result from sending broadcast again, doing another login: %v\n", err)
+						if err != nil {
+							slog.Warn("failed to send broadcast again (normal across VLANs/subnets)", "err", err)
+						} else {
+							slog.Info("successfully sent broadcast")
+						}
 
-						err = q.Login(cfg.Modbus.Username, cfg.Modbus.Password)
-						log.Printf("result from login attempt after broadcast (looping): %v\n", err)
+						slog.Info("attempting login again")
+						err = q.Login(ctx, cfg.Modbus.Username, cfg.Modbus.Password)
+						if err != nil {
+							slog.Warn("failed to complete login again", "err", err)
+						} else {
+							slog.Info("successfully logged in again")
+						}
 					}
 
 					continue
 				}
 
 				if cfg.LogQuery {
-					log.Printf("query data: %v\n", d.Pretty())
+					slog.Info("query data", "data", d.Pretty())
 				}
 
 				select {
 				case dataCh <- d:
 				default:
-					log.Printf("data channel full, dropping sample (mqtt client sad?)")
+					slog.Warn("data channel full, dropping sample (mqtt client sad?)")
 				}
 			}
 		}
@@ -210,12 +233,12 @@ func runAgent(args []string) {
 				}
 				payload, err := json.Marshal(d)
 				if err != nil {
-					log.Printf("marshal error: %v", err)
+					slog.Warn("marshal error when sending mqtt json", "err", err)
 					continue
 				}
 				token := mc.Publish(cfg.MQTT.Topic, cfg.MQTT.QoS, cfg.MQTT.Retain, payload)
 				if !token.WaitTimeout(5*time.Second) || token.Error() != nil {
-					log.Printf("mqtt publish error: %v", token.Error())
+					slog.Warn("mqtt publish error", "err", token.Error())
 				}
 			}
 		}
@@ -223,5 +246,5 @@ func runAgent(args []string) {
 
 	// Block until signal
 	<-ctx.Done()
-	log.Printf("goodbye")
+	slog.Info("exiting")
 }

@@ -2,7 +2,7 @@ package solar
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 	"net"
 	"time"
 )
@@ -42,15 +42,15 @@ func BroadcastHello(dst net.IP, self net.IP) error {
 		return fmt.Errorf("failed to send broadcast hello (%v): %v", packet, err)
 	}
 
-	log.Printf("Sent broadcast discovery packet (%d bytes)\n", n)
+	slog.Info("sent broadcast discovery packet", "size", n)
 
 	resp := make([]byte, 8192)
 	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 	n, err = conn.Read(resp)
 	if err != nil {
-		log.Printf("Failed to read a response to broadcast hello, but continuing anyway: %v", err)
+		slog.Warn("failed to read a response to broadcast hello, but continuing anyway", "err", err)
 		return nil
 	}
-	log.Printf("received broadcast hello response (%d bytes): %v", n, resp)
+	slog.Info("received broadcast hello response", "size", n, "response", resp)
 	return nil
 }

@@ -6,70 +6,9 @@ import (
 	"time"
 )
 
-// Inverter telemetry that I care about
-type Data struct {
-	Timestamp time.Time `json:"timestamp"`
+/*
 
-	ModelName           string  `json:"model_name"`
-	SerialNumber        string  `json:"serial_number"`
-	InternalTemperature float64 `json:"internal_temperature_c"`
-	DeviceStatus        uint16  `json:"device_status"`
-	DeviceStatusText    string  `json:"device_status_text"`
 
-	// I believe this is DC input power?
-	InputPowerW float64 `json:"input_power_w"`
-	// ...whereas this is the inverted AC power
-	ActivePowerW float64 `json:"active_power_w"`
-
-	// AC bus as seen at the inverter
-	// At night this just goes to 0
-	GridVoltageV    float64 `json:"grid_voltage_v"`
-	GridFrequencyHz float64 `json:"grid_frequency_hz"`
-
-	// MPPT cumulative energy (kWh)
-	// yes, funny word, but its consistent with others
-	MPPT1CumKWh float64 `json:"mppt1_cum_kwh"`
-	MPPT2CumKWh float64 `json:"mppt2_cum_kwh"`
-	MPPT3CumKWh float64 `json:"mppt3_cum_kwh"`
-
-	// PV string voltages and currents
-	PV1VoltageV float64 `json:"pv1_voltage_v"`
-	PV1CurrentA float64 `json:"pv1_current_a"`
-	PV2VoltageV float64 `json:"pv2_voltage_v"`
-	PV2CurrentA float64 `json:"pv2_current_a"`
-	PV3VoltageV float64 `json:"pv3_voltage_v"`
-	PV3CurrentA float64 `json:"pv3_current_a"`
-
-	// Phase voltages, as read by the external meter, for single phase only A is used
-	MeterGridAVoltageV float64 `json:"meter_grid_a_voltage_v"`
-	MeterGridBVoltageV float64 `json:"meter_grid_b_voltage_v"`
-	MeterGridCVoltageV float64 `json:"meter_grid_c_voltage_v"`
-	MeterGridFrequency float64 `json:"meter_grid_frequency_hz"`
-
-	// Power read by the external meter
-	MeterActivePowerW     float64 `json:"meter_active_power_w"`
-	MeterReactivePowerW   float64 `json:"meter_reactive_power_w"`
-	MeterActiveGridPowerW float64 `json:"meter_active_grid_power_w"`
-
-	// Power read within the inverter
-	InverterActivePowerW   float64 `json:"inverter_active_power_w"`
-	InverterReactivePowerW float64 `json:"inverter_reactive_power_w"`
-}
-
-func (c *Client) Query(_ context.Context) (*Data, error) {
-	var err error
-
-	d := &Data{Timestamp: time.Now().UTC()}
-
-	// Identity
-	if d.ModelName, err = c.readString(30000, 15); err != nil {
-		return nil, fmt.Errorf("read model_name: %w", err)
-	}
-	if d.SerialNumber, err = c.readString(30015, 10); err != nil {
-		return nil, fmt.Errorf("read serial_number: %w", err)
-	}
-
-	// Core inverter metrics
 	if d.InputPowerW, err = c.readI32Scaled(32064, 1); err != nil {
 		return nil, fmt.Errorf("read input_power: %w", err)
 	}
@@ -152,6 +91,69 @@ func (c *Client) Query(_ context.Context) (*Data, error) {
 		return nil, fmt.Errorf("read inverter_reactive_power_w: %w", err)
 	}
 
+*/
+
+// Inverter telemetry that I care about
+type Data struct {
+	Timestamp time.Time `json:"timestamp"`
+
+	ModelName           string  `json:"model_name" modbus_addr:"30000" modbus_str_len:"30"`
+	SerialNumber        string  `json:"serial_number" modbus_addr:"30015" modbus_str_len:"20"`
+	InternalTemperature float64 `json:"internal_temperature_c" modbus_addr:"32087"`
+	DeviceStatus        uint16  `json:"device_status" modbus_addr:"32089"`
+	DeviceStatusText    string  `json:"device_status_text"`
+
+	// I believe this is DC input power?
+	InputPowerW float64 `json:"input_power_w" modbus_type:"i32" modbus_addr:"32064"`
+	// ...whereas this is the inverted AC power
+	ActivePowerW float64 `json:"active_power_w" modbus_addr:"32080"`
+
+	// AC bus as seen at the inverter
+	// At night this just goes to 0
+	GridVoltageV    float64 `json:"grid_voltage_v" modbus_type:"u16" modbus_scalar:"10" modbus_addr:"32066"`
+	GridFrequencyHz float64 `json:"grid_frequency_hz" modbus_addr:"32085"`
+
+	// MPPT cumulative energy (kWh)
+	// yes, funny word, but its consistent with others
+	MPPT1CumKWh float64 `json:"mppt1_cum_kwh" modbus_addr:"32212"`
+	MPPT2CumKWh float64 `json:"mppt2_cum_kwh" modbus_addr:"32214"`
+	MPPT3CumKWh float64 `json:"mppt3_cum_kwh" modbus_addr:"32216"`
+
+	// PV string voltages and currents
+	PV1VoltageV float64 `json:"pv1_voltage_v" modbus_addr:"32016"`
+	PV1CurrentA float64 `json:"pv1_current_a" modbus_addr:"32017"`
+	PV2VoltageV float64 `json:"pv2_voltage_v" modbus_addr:"32018"`
+	PV2CurrentA float64 `json:"pv2_current_a" modbus_addr:"32019"`
+	PV3VoltageV float64 `json:"pv3_voltage_v" modbus_addr:"32020"`
+	PV3CurrentA float64 `json:"pv3_current_a" modbus_addr:"32021"`
+
+	// Phase voltages, as read by the external meter, for single phase only A is used
+	MeterGridAVoltageV float64 `json:"meter_grid_a_voltage_v" modbus_addr:"37101"`
+	MeterGridBVoltageV float64 `json:"meter_grid_b_voltage_v" modbus_addr:"37103"`
+	MeterGridCVoltageV float64 `json:"meter_grid_c_voltage_v" modbus_addr:"37105"`
+	MeterGridFrequency float64 `json:"meter_grid_frequency_hz" modbus_addr:"37118"`
+
+	// Power read by the external meter
+	MeterActivePowerW     float64 `json:"meter_active_power_w" modbus_addr:"37113"`
+	MeterReactivePowerW   float64 `json:"meter_reactive_power_w" modbus_addr:"37115"`
+	MeterActiveGridPowerW float64 `json:"meter_active_grid_power_w" modbus_addr:"37132"`
+
+	// Power read within the inverter
+	InverterActivePowerW   float64 `json:"inverter_active_power_w" modbus_addr:"32080"`
+	InverterReactivePowerW float64 `json:"inverter_reactive_power_w" modbus_addr:"32082"`
+}
+
+func (c *Client) Query(ctx context.Context) (*Data, error) {
+	d := &Data{Timestamp: time.Now().UTC()}
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	err := c.conn.QueryStructRegisters(ctx, d)
+	if err != nil {
+		return nil, err
+	}
+
+	d.DeviceStatusText = StatusText(d.DeviceStatus)
 	return d, nil
 }
 

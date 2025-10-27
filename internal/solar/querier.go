@@ -2,9 +2,7 @@ package solar
 
 import (
 	"context"
-	"encoding/binary"
 	"fmt"
-	"strings"
 	"time"
 )
 
@@ -159,72 +157,6 @@ func (c *Client) Query(_ context.Context) (*Data, error) {
 
 func (d Data) Pretty() string {
 	return fmt.Sprintf("%#v", d)
-}
-
-func (c *Client) readU16(addr uint16) (uint16, error) {
-	b, err := c.client.ReadHoldingRegisters(addr, 1)
-	if err != nil {
-		return 0, err
-	}
-	if len(b) < 2 {
-		return 0, fmt.Errorf("short read u16 at %d", addr)
-	}
-	return binary.BigEndian.Uint16(b[:2]), nil
-}
-
-func (c *Client) readU16Scaled(addr uint16, gain uint32) (float64, error) {
-	v, err := c.readU16(addr)
-	if err != nil {
-		return 0, err
-	}
-	return float64(v) / float64(gain), nil
-}
-
-func (c *Client) readI16Scaled(addr uint16, gain uint32) (float64, error) {
-	b, err := c.client.ReadHoldingRegisters(addr, 1)
-	if err != nil {
-		return 0, err
-	}
-	if len(b) < 2 {
-		return 0, fmt.Errorf("short read i16 at %d", addr)
-	}
-	v := int16(binary.BigEndian.Uint16(b[:2]))
-	return float64(v) / float64(gain), nil
-}
-
-func (c *Client) readI32Scaled(addr uint16, gain uint32) (float64, error) {
-	b, err := c.client.ReadHoldingRegisters(addr, 2)
-	if err != nil {
-		return 0, err
-	}
-	if len(b) < 4 {
-		return 0, fmt.Errorf("short read i32 at %d", addr)
-	}
-	v := int32(binary.BigEndian.Uint32(b[:4]))
-	return float64(v) / float64(gain), nil
-}
-
-func (c *Client) readU32Scaled(addr uint16, gain uint32) (float64, error) {
-	b, err := c.client.ReadHoldingRegisters(addr, 2)
-	if err != nil {
-		return 0, err
-	}
-	if len(b) < 4 {
-		return 0, fmt.Errorf("short read i32 at %d", addr)
-	}
-	v := uint32(binary.BigEndian.Uint32(b[:4]))
-	return float64(v) / float64(gain), nil
-}
-
-func (c *Client) readString(addr uint16, count uint16) (string, error) {
-	b, err := c.client.ReadHoldingRegisters(addr, count)
-	if err != nil {
-		return "", err
-	}
-	// UTF-8/ASCII packed in big-endian u16 registers.
-	// Remove trailing NULs.
-	s := strings.TrimRight(string(b), "\x00")
-	return s, nil
 }
 
 func StatusText(code uint16) string {

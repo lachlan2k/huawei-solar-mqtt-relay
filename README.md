@@ -28,10 +28,25 @@ Example in `config.example.yaml`.
 
 ## Running it
 
-### Docker
+### Docker Run
 
 ```bash
-docker run -d --net host --name solar-mqtt-relay -v /path/to/config.yaml:/config/config.yaml ghcr.io/lachlan2k/huawei-solar-mqtt-relay:latest
+docker run -d --net host --name solar-mqtt-relay -v /path/to/config.yaml:/config/config.yaml ghcr.io/lachlan2k/huawei-solar-mqtt-relay:main
+```
+
+### Docker Compose
+
+```
+---
+
+services:
+  huawei_solar:
+    image: ghcr.io/lachlan2k/huawei-solar-mqtt-relay:main
+    container_name: solar-mqtt-relay
+    restart: unless-stopped
+    network_mode: "host"
+    volumes:
+      - /path/to/config.yaml:/config/config.yaml
 ```
 
 ### From source

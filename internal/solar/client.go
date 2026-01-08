@@ -20,6 +20,9 @@ func NewClient(conn *modbus.ModbusConn) *Client {
 func (c *Client) Run(ctx context.Context) error {
 	return c.conn.Run(ctx)
 }
+func (c *Client) Close() error {
+	return c.conn.Close()
+}
 
 func (c *Client) QueryDeviceInfos(ctx context.Context) { // yes that's what it's called
 	resp, err := c.conn.FunctionCall(ctx, 0x2B, []byte{

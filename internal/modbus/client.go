@@ -1,21 +1,14 @@
 package modbus
 
 import (
-	"bytes"
 	"context"
-	"encoding/binary"
 	"fmt"
 	"io"
 	"log/slog"
-	"math"
 	"net"
-	"reflect"
-	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 
-	"golang.org/x/exp/constraints"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -29,6 +22,8 @@ type ModbusConn struct {
 
 	waitersMu sync.Mutex
 	waiters   map[uint16]chan *ModbusTCPADU
+
+	runningMu sync.Mutex
 }
 
 func NewModbusConn(conn net.Conn, slaveId uint8) *ModbusConn {
@@ -46,7 +41,21 @@ func NewModbusConn(conn net.Conn, slaveId uint8) *ModbusConn {
 	}
 }
 
+func (c *ModbusConn) Close() error {
+	return c.conn.Close()
+}
+
+func (c *ModbusConn) SetConn(conn net.Conn) {
+	c.conn = conn
+}
+
 func (c *ModbusConn) Run(parentCtx context.Context) error {
+	ok := c.runningMu.TryLock()
+	if !ok {
+		return fmt.Errorf("modbus: already running")
+	}
+	defer c.runningMu.Unlock()
+
 	defer c.conn.Close()
 	g, ctx := errgroup.WithContext(parentCtx)
 
@@ -164,174 +173,6 @@ func (c *ModbusConn) FunctionCall(ctx context.Context, fc uint8, data []byte) (*
 	case result := <-resultCh:
 		return result, nil
 	}
-}
-
-func (c *ModbusConn) ReadHoldingRegistersU16(ctx context.Context, address, quantity uint16) ([]byte, error) {
-	if quantity < 1 || quantity > 125 {
-		return nil, fmt.Errorf("modbus: quantity '%v' must be between '%v' and '%v',", quantity, 1, 125)
-	}
-
-	var buff bytes.Buffer
-
-	binary.Write(&buff, binary.BigEndian, address)
-	binary.Write(&buff, binary.BigEndian, quantity)
-
-	resp, err := c.FunctionCall(ctx, 0x03, buff.Bytes())
-	if err != nil {
-		return nil, fmt.Errorf("modbus: failed to make call to read holding registers: %v", err)
-	}
-
-	if len(resp.Data) == 0 {
-		return nil, fmt.Errorf("modbus: register read response data is empty")
-	}
-
-	count := uint16(resp.Data[0])
-	if count != quantity*2 {
-		return nil, fmt.Errorf("modbus: response data size '%d' does not match requested '%d' registers", count, quantity*2)
-	}
-
-	values := resp.Data[1:]
-
-	if int(count) != len(values) {
-		return nil, fmt.Errorf("modbus: response data payload size '%d' does not match expected '%d'", count, len(resp.Data)-2)
-	}
-
-	return values, nil
-}
-
-func ReadHoldingRegisters[T constraints.Integer | constraints.Float](c *ModbusConn, ctx context.Context, address, quantityT uint16) ([]T, error) {
-	tSize := intDataSize(T(0))
-	quantityU16 := uint16(math.Ceil(float64(quantityT) * float64(tSize) / 2))
-
-	if quantityU16 > 125 {
-		return nil, fmt.Errorf("modbus: reading %d values results in %d u16 registesr, which is more than 125", quantityT, quantityU16)
-	}
-
-	slog.Debug("querying modbus holding registers", "address", address, "quantity", quantityT, "total", quantityU16)
-	valuesAsBytes, err := c.ReadHoldingRegistersU16(ctx, address, quantityU16)
-	if err != nil {
-		return nil, err
-	}
-
-	results := make([]T, quantityT)
-	for i := range results {
-		this := i * tSize
-		next := (i + 1) * tSize
-		binary.Decode(valuesAsBytes[this:next], binary.BigEndian, &results[i])
-	}
-
-	return results, nil
-}
-
-func ReadHoldingRegister[T constraints.Integer | constraints.Float](c *ModbusConn, ctx context.Context, address uint16) (T, error) {
-	res, err := ReadHoldingRegisters[T](c, ctx, address, 1)
-	if err != nil {
-		return T(0), err
-	}
-	return res[0], nil
-}
-func ReadHoldingRegisterP[T constraints.Integer | constraints.Float](c *ModbusConn, ctx context.Context, address uint16, result *T) error {
-	res, err := ReadHoldingRegisters[T](c, ctx, address, 1)
-	if err != nil {
-		return err
-	}
-	*result = res[0]
-	return nil
-}
-
-func ReadHoldingRegisterString(c *ModbusConn, ctx context.Context, address uint16, size uint16) (string, error) {
-	// +! null terminator
-	res, err := ReadHoldingRegisters[byte](c, ctx, address, size+1)
-	if err != nil {
-		return "", err
-	}
-
-	return strings.TrimRight(string(res[:size]), "\x00"), nil
-}
-
-func ReadHoldingRegisterAny(c *ModbusConn, ctx context.Context, address uint16, result any) error {
-	switch v := result.(type) {
-	case *int8:
-		return ReadHoldingRegisterP(c, ctx, address, v)
-	case *uint8:
-		return ReadHoldingRegisterP(c, ctx, address, v)
-	case *int16:
-		return ReadHoldingRegisterP(c, ctx, address, v)
-	case *uint16:
-		return ReadHoldingRegisterP(c, ctx, address, v)
-	case *int32:
-		return ReadHoldingRegisterP(c, ctx, address, v)
-	case *uint32:
-		return ReadHoldingRegisterP(c, ctx, address, v)
-	case *int64:
-		return ReadHoldingRegisterP(c, ctx, address, v)
-	case *uint64:
-		return ReadHoldingRegisterP(c, ctx, address, v)
-	case *float32:
-		return ReadHoldingRegisterP(c, ctx, address, v)
-	case *float64:
-		return ReadHoldingRegisterP(c, ctx, address, v)
-	}
-	return fmt.Errorf("modbus unsupported type for 'any' read %T", result)
-}
-
-func (c *ModbusConn) QueryStructRegisters(ctx context.Context, d interface{}) error {
-	v := reflect.ValueOf(d).Elem()
-	st := v.Type()
-
-	for i := 0; i < v.NumField(); i++ {
-		field := v.Field(i)
-		fieldType := st.Field(i)
-
-		addrTag := fieldType.Tag.Get("modbus_addr")
-		if addrTag == "" {
-			continue
-		}
-
-		addr, err := strconv.ParseUint(addrTag, 10, 16)
-		if err != nil {
-			return fmt.Errorf("field %q has an invalid modbus_addr tag: %v", fieldType.Name, err)
-		}
-
-		switch field.Type().Kind() {
-		case reflect.String:
-			strLenStr := fieldType.Tag.Get("modbus_str_len")
-			strLen, err := strconv.ParseInt(strLenStr, 10, 16)
-
-			if err != nil || strLen == 0 {
-				return fmt.Errorf("field %q is a string, but does not have a valid modbus_str_len tag", fieldType.Name)
-			}
-
-			strOut, err := ReadHoldingRegisterString(c, ctx, uint16(addr), uint16(strLen))
-			if err != nil {
-				return fmt.Errorf("failed to read %q (%s): %v", fieldType.Name, fieldType.Type.Name(), err)
-			}
-			field.SetString(strOut)
-
-		default:
-			err := ReadHoldingRegisterAny(c, ctx, uint16(addr), field.Addr().Interface())
-			if err != nil {
-				return fmt.Errorf("failed to read %q (%s): %v", fieldType.Name, fieldType.Type.Name(), err)
-			}
-		}
-	}
-
-	return nil
-}
-
-// from encoding/binary, but removed slice types, and made it generic
-func intDataSize[T constraints.Integer | constraints.Float](data T) int {
-	switch any(data).(type) {
-	case int8, uint8:
-		return 1
-	case int16, uint16:
-		return 2
-	case int32, uint32, float32:
-		return 4
-	case int64, uint64, float64:
-		return 8
-	}
-	return 0
 }
 
 // Reads exactly 1 MBAP header and PDU from the client, writes it to the server
